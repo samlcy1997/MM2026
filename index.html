@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#08101d" />
+  <meta name="robots" content="noindex,nofollow,noarchive" />
+  <meta http-equiv="Cache-Control" content="no-store" />
+  <title>MM2026｜Secure Console</title>
+  <style>
+    :root{--bg:#070b13;--panel:#101726;--line:#26334a;--text:#eef4ff;--muted:#98a7bf;--miku:#39c5bb;--red:#ff7682}
+    *{box-sizing:border-box}html,body{min-height:100%}body{margin:0;background:radial-gradient(900px 560px at 50% -8%,#18324b 0%,var(--bg) 58%);color:var(--text);font-family:Inter,"Noto Sans TC","Noto Sans JP",system-ui,-apple-system,"Segoe UI",sans-serif;display:grid;place-items:center;padding:20px}
+    .card{width:min(430px,100%);padding:26px;border:1px solid var(--line);border-radius:24px;background:linear-gradient(180deg,var(--panel),#0c1220);box-shadow:0 22px 60px rgba(0,0,0,.35)}
+    .eyebrow{font-size:12px;letter-spacing:.16em;color:var(--miku);font-weight:900}.title{margin:8px 0 7px;font-size:34px;line-height:1.05}.sub{margin:0 0 20px;color:var(--muted);font-size:14px;line-height:1.55}
+    label{display:block;font-size:12px;color:var(--muted);font-weight:800;margin-bottom:7px}input{width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:12px;background:#080e19;color:var(--text);font:inherit;outline:none}input:focus{border-color:var(--miku);box-shadow:0 0 0 3px rgba(57,197,187,.09)}
+    button{width:100%;margin-top:11px;padding:12px 14px;border:0;border-radius:12px;background:var(--miku);color:#031514;font:inherit;font-weight:900;cursor:pointer}button:disabled{opacity:.55;cursor:wait}
+    .status{min-height:22px;margin-top:11px;font-size:12px;color:var(--muted)}.status.bad{color:#ffc4ca}.foot{margin-top:17px;padding-top:14px;border-top:1px solid var(--line);font-size:11px;color:#68758b;line-height:1.5}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow">MM2026 · SECURE CONSOLE</div>
+    <h1 class="title">Travel OS</h1>
+    <p class="sub">輸入專用 passphrase 後，行程只會喺目前瀏覽器記憶體內解密。Repo 本身只保存加密 payload。</p>
+    <form id="unlockForm">
+      <label for="passphrase">Passphrase</label>
+      <input id="passphrase" name="passphrase" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" required autofocus />
+      <button id="unlockButton" type="submit">Unlock</button>
+      <div id="status" class="status" aria-live="polite"></div>
+    </form>
+    <div class="foot">Session-only unlock · passphrase 不會寫入 URL、localStorage 或 GitHub。</div>
+  </main>
+<script>
+const $=s=>document.querySelector(s);
+const b64ToBytes=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+async function fetchJson(path){const r=await fetch(path,{cache:'no-store'});if(!r.ok)throw new Error(`Missing ${path}`);return r.json()}
+async function deriveKek(passphrase, cfg){
+  const material=await crypto.subtle.importKey('raw',new TextEncoder().encode(passphrase),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',hash:'SHA-256',salt:b64ToBytes(cfg.salt),iterations:cfg.iterations},material,{name:'AES-GCM',length:256},false,['decrypt']);
+}
+async function unlock(passphrase){
+  const [keyring,payload]=await Promise.all([fetchJson('keyring.json'),fetchJson('trip.enc.json')]);
+  const cfg=keyring.encryptedPrivateKey;
+  const kek=await deriveKek(passphrase,cfg);
+  let privateDer;
+  try{
+    privateDer=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64ToBytes(cfg.iv),additionalData:new TextEncoder().encode(cfg.aad)},kek,b64ToBytes(cfg.ciphertext));
+  }catch{throw new Error('Wrong passphrase')}
+  const privateKey=await crypto.subtle.importKey('pkcs8',privateDer,{name:'RSA-OAEP',hash:'SHA-256'},false,['decrypt']);
+  const rawAes=await crypto.subtle.decrypt({name:'RSA-OAEP'},privateKey,b64ToBytes(payload.wrappedKey));
+  const aesKey=await crypto.subtle.importKey('raw',rawAes,{name:'AES-GCM'},false,['decrypt']);
+  let plain;
+  try{
+    plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64ToBytes(payload.iv),additionalData:new TextEncoder().encode(payload.aad)},aesKey,b64ToBytes(payload.ciphertext));
+  }catch{throw new Error('Encrypted payload failed integrity check')}
+  return new TextDecoder().decode(plain);
+}
+$('#unlockForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const button=$('#unlockButton'), status=$('#status'), input=$('#passphrase');
+  button.disabled=true; input.disabled=true; status.className='status'; status.textContent='Unlocking…';
+  try{
+    const html=await unlock(input.value);
+    input.value='';
+    document.open(); document.write(html); document.close();
+  }catch(err){
+    status.className='status bad'; status.textContent=err.message==='Wrong passphrase'?'Passphrase 不正確。':'解鎖失敗，請重新整理再試。';
+    input.disabled=false; button.disabled=false; input.focus();
+  }
+});
+</script>
+</body>
+</html>
