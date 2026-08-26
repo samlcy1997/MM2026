@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { webcrypto, createHash } from 'node:crypto';
-const { subtle, getRandomValues } = webcrypto;
+const { subtle } = webcrypto;
 const [sourceUrl, outPath='trip.enc.json'] = process.argv.slice(2);
 if(!sourceUrl) throw new Error('Usage: node encrypt-from-url.mjs <sourceUrl> [outPath]');
 const keyring=JSON.parse(await readFile('keyring.json','utf8'));
@@ -11,7 +11,7 @@ const plain=new Uint8Array(await response.arrayBuffer());
 if(plain.length<1000) throw new Error('Source unexpectedly small; refusing to publish');
 const aesKey=await subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt']);
 const rawAes=new Uint8Array(await subtle.exportKey('raw',aesKey));
-const iv=getRandomValues(new Uint8Array(12));
+const iv=webcrypto.getRandomValues(new Uint8Array(12));
 const aad='MM2026-PAYLOAD-v1';
 const ciphertext=new Uint8Array(await subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode(aad)},aesKey,plain));
 const wrappedKey=new Uint8Array(await subtle.encrypt({name:'RSA-OAEP'},publicKey,rawAes));
