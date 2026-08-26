@@ -1,0 +1,57 @@
+name: Assemble encrypted payload
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'trip.manifest.json'
+      - 'trip.enc.*.txt'
+      - '.github/workflows/assemble-encrypted-payload.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Assemble ciphertext JSON
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path('trip.manifest.json').read_text())
+          if manifest.get('schema') != 2:
+              raise SystemExit('Unsupported manifest schema')
+          chunks = manifest.get('chunks') or []
+          if not chunks:
+              raise SystemExit('No ciphertext chunks')
+
+          ciphertext = ''.join(Path(p).read_text().strip() for p in chunks)
+          out = {
+              'schema': 1,
+              'cipher': manifest['cipher'],
+              'keyWrap': manifest['keyWrap'],
+              'iv': manifest['iv'],
+              'aad': manifest['aad'],
+              'wrappedKey': manifest['wrappedKey'],
+              'ciphertext': ciphertext,
+              'plainSha256': manifest['plainSha256'],
+          }
+          Path('trip.enc.json').write_text(json.dumps(out, separators=(',', ':')))
+          print(f"assembled {len(ciphertext)} base64 chars; plaintext sha256={out['plainSha256']}")
+          PY
+      - name: Commit assembled encrypted payload
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add trip.enc.json
+          if git diff --cached --quiet; then
+            echo "No payload change"
+          else
+            git commit -m "Assemble encrypted travel payload"
+            git push
+          fi
